@@ -1,8 +1,8 @@
-# crystal-cell-settler
+# Crystal-Cell-Setter
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
 
-`crystal-cell-settler` is a Python-based GUI application designed for crystallographers and computational chemists. It provides a visual, interactive environment to load molecular structures (from `.mol` or `.cif` files), define or adjust unit cell parameters, and reposition the molecule within the cell before saving the result as a `.cif` file.
+`Crystal-Cell-Setter` is a Python-based GUI application designed for crystallographers and computational chemists. It provides a visual, interactive environment to load molecular structures (from `.mol` or `.cif` files), define or adjust unit cell parameters, and reposition the molecule within the cell before saving the result as a `.cif` file.
 
 This tool is built using PyQt6, PyVista, and ASE (Atomic Simulation Environment).
 
@@ -45,7 +45,7 @@ These dependencies will be installed automatically when installing the package.
 
 Install the package using `pip`. This will also install all required dependencies and register the command-line entry point.
     ```bash
-    pip install crystal-cell-settler
+    pip install crystal-cell-setter
     ```
 
 ## Usage
@@ -53,7 +53,7 @@ Install the package using `pip`. This will also install all required dependencie
 After installation, you can run the application by simply typing the following command in your terminal:
 
 ```bash
-crystal-cell-settler
+crystal-cell-setter
 ````
 
 This will launch the main application window.

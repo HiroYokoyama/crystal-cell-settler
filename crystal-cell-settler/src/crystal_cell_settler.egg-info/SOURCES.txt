@@ -1,8 +1,0 @@
-README.md
-pyproject.toml
-src/crystal_cell_settler.egg-info/PKG-INFO
-src/crystal_cell_settler.egg-info/SOURCES.txt
-src/crystal_cell_settler.egg-info/dependency_links.txt
-src/crystal_cell_settler.egg-info/entry_points.txt
-src/crystal_cell_settler.egg-info/requires.txt
-src/crystal_cell_settler.egg-info/top_level.txt

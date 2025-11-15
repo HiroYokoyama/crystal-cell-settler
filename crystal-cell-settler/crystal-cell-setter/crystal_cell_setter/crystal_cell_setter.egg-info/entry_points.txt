@@ -1,0 +1,2 @@
+[console_scripts]
+crystal-cell-settler = crystal_cell_setter.main:run_app

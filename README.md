@@ -44,9 +44,9 @@ These dependencies will be installed automatically when installing the package.
 
 Install the package using `pip`. This will also install all required dependencies and register the command-line entry point.
 
-    ```bash
-    pip install celleditpy
-    ```
+```bash
+pip install celleditpy
+```
 
 ## Usage
 
@@ -62,12 +62,6 @@ This will launch the main application window.
 
 This project is licensed under the Apache-2.0 License. See the `LICENSE` file for details.
 
-## Author
-
-  * **HiroYokoyama**
-
-
-```
 
 
 

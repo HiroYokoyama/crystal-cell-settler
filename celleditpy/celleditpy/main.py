@@ -10,7 +10,7 @@ Repo: https://github.com/HiroYokoyama/crystal-cell-setter
 DOI 10.5281/zenodo.17620125
 """
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 
 import sys
 import numpy as np

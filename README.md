@@ -1,13 +1,12 @@
-# Crystal-Cell-Setter
+# CelleditPy
 
+![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17620125.svg)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
 
-`Crystal-Cell-Setter` is a Python-based GUI application designed for crystallographers and computational chemists. It provides a visual, interactive environment to load molecular structures (from `.mol` or `.cif` files), define or adjust unit cell parameters, and reposition the molecule within the cell before saving the result as a `.cif` file.
+
+`CelleditPy` is a Python-based GUI application designed for crystallographers and computational chemists. It provides a visual, interactive environment to load molecular structures (from `.mol` or `.cif` files), define or adjust unit cell parameters, and reposition the molecule within the cell before saving the result as a `.cif` file.
 
 This tool is built using PyQt6, PyVista, and ASE (Atomic Simulation Environment).
-
-
-*(Suggestion: Add a screenshot of your application here)*
 
 ## Features
 
@@ -45,7 +44,7 @@ These dependencies will be installed automatically when installing the package.
 
 Install the package using `pip`. This will also install all required dependencies and register the command-line entry point.
     ```bash
-    pip install crystal-cell-setter
+    pip install celleditpy
     ```
 
 ## Usage
@@ -53,7 +52,7 @@ Install the package using `pip`. This will also install all required dependencie
 After installation, you can run the application by simply typing the following command in your terminal:
 
 ```bash
-crystal-cell-setter
+celleditpy
 ````
 
 This will launch the main application window.

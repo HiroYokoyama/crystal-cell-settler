@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-CelleditPy - A GUI tool to set and adjust unit cell parameters for molecular structures.
+CelleditPy - A GUI tool to set and adjust unit cell parameters for crystal structures.
 
 Author: Hiromichi Yokoyama
-License: Apache-2.0 license
+License: GPL-3.0 license
 Repo: https://github.com/HiroYokoyama/crystal-cell-setter
 DOI 10.5281/zenodo.17620125
 """
 
-VERSION = "0.1.7"
+VERSION = "0.2.0"
 
 import sys
 import numpy as np
@@ -65,6 +65,12 @@ class CellSetterApp(QMainWindow):
         n_b = int(self.supercell_spinboxes['b'].value())
         n_c = int(self.supercell_spinboxes['c'].value())
         self._supercell_params = (show_supercell, n_a, n_b, n_c)
+
+        # --- 修正: Show Supercellが無効で、かつ操作元がチェックボックス以外(数値変更)なら再描画しない ---
+        if not show_supercell and self.sender() != self.supercell_checkbox:
+            return
+        # -------------------------------------------------------------------------------------
+
         # Show SupercellのON/OFFにかかわらず、UIの状態に従って再描画
         cell_center = np.array([0.0, 0.0, 0.0])
         self.draw_scene_manually(force_reset=False, cell_center=cell_center, draw_supercell=show_supercell)
@@ -123,12 +129,12 @@ class CellSetterApp(QMainWindow):
         self.group_tab_layout.setSpacing(6)
         self.control_tabs.addTab(self.group_tab, "Group Control")
 
-        # Advanced tab (advanced transforms / optimization)
-        self.advanced_tab = QWidget()
-        self.advanced_tab_layout = QVBoxLayout(self.advanced_tab)
-        self.advanced_tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.advanced_tab_layout.setSpacing(6)
-        self.control_tabs.addTab(self.advanced_tab, "Advanced")
+        # view tab (view transforms / optimization)
+        self.view_tab = QWidget()
+        self.view_tab_layout = QVBoxLayout(self.view_tab)
+        self.view_tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.view_tab_layout.setSpacing(6)
+        self.control_tabs.addTab(self.view_tab, "View")
 
         # === File Operations ===
         file_label = QLabel("=== File Operations ===")
@@ -192,11 +198,44 @@ class CellSetterApp(QMainWindow):
         self.main_tab_layout.addWidget(self.apply_cell_button)
 
         self.optimize_button = QPushButton("Auto-fit Cell Size")
-        self.optimize_button.clicked.connect(self.optimize_cell_size)
+        self.optimize_button.clicked.connect(lambda: self.optimize_cell_size(draw=True))
         self.optimize_button.setEnabled(False) 
         # Auto-fit: place under Cell in Main tab
         self.main_tab_layout.addWidget(self.optimize_button)
 
+        self.main_tab_layout.addSpacing(20)
+        
+        # === Structure Operations ===
+        struct_label = QLabel("=== Structure Operations ===")
+        # Structure operations -> Main tab (option 3)
+        self.main_tab_layout.addWidget(struct_label)
+        
+        self.optimize_coord_button = QPushButton("Shift into Cell")
+        self.optimize_coord_button.clicked.connect(self.optimize_coordinate)
+        self.optimize_coord_button.setEnabled(False) 
+        self.main_tab_layout.addWidget(self.optimize_coord_button)
+                
+        self.fix_atom0_button = QPushButton("Rotate into Cell")
+        self.fix_atom0_button.clicked.connect(self.fix_atom0_and_fit)
+        self.fix_atom0_button.setEnabled(False)
+        self.main_tab_layout.addWidget(self.fix_atom0_button)
+
+                
+        self.fit_to_cell_button = QPushButton("Fit Molecule to Axis")
+        self.fit_to_cell_button.clicked.connect(self.fit_molecule_to_cell)
+        self.fit_to_cell_button.setEnabled(False)
+        self.main_tab_layout.addWidget(self.fit_to_cell_button)
+
+
+        # --- 原子削除ボタン ---
+        self.delete_atom_button = QPushButton("Delete Atom(s)")
+        self.delete_atom_button.clicked.connect(self.delete_atoms_dialog)
+        self.delete_atom_button.setEnabled(False)
+        self.main_tab_layout.addWidget(self.delete_atom_button)
+
+        self.main_tab_layout.addSpacing(20)
+
+        
         # === Supercell Parameters ===
         supercell_label = QLabel("=== Supercell ===")
         # Supercell -> Main tab
@@ -232,55 +271,31 @@ class CellSetterApp(QMainWindow):
         
         self.main_tab_layout.addSpacing(20)
         
-        # === Structure Operations ===
-        struct_label = QLabel("=== Structure Operations ===")
-        # Structure operations -> Main tab (option 3)
-        self.main_tab_layout.addWidget(struct_label)
-        
-        self.fit_to_cell_button = QPushButton("Fit Molecule to Axis")
-        self.fit_to_cell_button.clicked.connect(self.fit_molecule_to_cell)
-        self.fit_to_cell_button.setEnabled(False)
-        self.main_tab_layout.addWidget(self.fit_to_cell_button)
-        
-        self.fix_atom0_button = QPushButton("Fit in Cell")
-        self.fix_atom0_button.clicked.connect(self.fix_atom0_and_fit)
-        self.fix_atom0_button.setEnabled(False)
-        self.main_tab_layout.addWidget(self.fix_atom0_button)
-        
-        self.optimize_coord_button = QPushButton("Wrap into Cell")
-        self.optimize_coord_button.clicked.connect(self.optimize_coordinate)
-        self.optimize_coord_button.setEnabled(False) 
-        self.main_tab_layout.addWidget(self.optimize_coord_button)
-
-        # --- 原子削除ボタン ---
-        self.delete_atom_button = QPushButton("Delete Atom(s)")
-        self.delete_atom_button.clicked.connect(self.delete_atoms_dialog)
-        self.delete_atom_button.setEnabled(False)
-        self.main_tab_layout.addWidget(self.delete_atom_button)
-        
-        self.main_tab_layout.addSpacing(20)
         
         # === Transform Controls ===
         transform_label = QLabel("=== Transform Controls ===")
-        # Transform Controls -> Group Control tab (option 3)
         self.group_tab_layout.addWidget(transform_label)
         
         # 平行移動 (XYZ / ABCモード切り替え)
         translate_group = QWidget()
         translate_layout = QGridLayout(translate_group)
-        translate_layout.addWidget(QLabel("Translation (Å):"), 0, 0, 1, 2)
+        
+        # [修正] ラベルを変数(self.translate_header_label)にして、後でテキスト変更可能にする
+        self.translate_header_label = QLabel("Translation (Å):")
+        translate_layout.addWidget(self.translate_header_label, 0, 0, 1, 2)
         
         # モード切り替えボタン
         from PyQt6.QtWidgets import QButtonGroup, QRadioButton
         self.translate_mode_group = QButtonGroup(translate_group)
         self.translate_xyz_radio = QRadioButton("XYZ mode")
         self.translate_abc_radio = QRadioButton("ABC mode")
-        self.translate_xyz_radio.setChecked(True)
+        self.translate_abc_radio.setChecked(True)
         self.translate_mode_group.addButton(self.translate_xyz_radio)
         self.translate_mode_group.addButton(self.translate_abc_radio)
         
-        translate_layout.addWidget(self.translate_xyz_radio, 1, 0)
-        translate_layout.addWidget(self.translate_abc_radio, 1, 1)
+        translate_layout.addWidget(self.translate_abc_radio, 1, 0)
+        translate_layout.addWidget(self.translate_xyz_radio, 1, 1)
+        
         
         # 軸入力（共通ラベルとスピンボックス）
         self.translate_labels = []
@@ -306,44 +321,51 @@ class CellSetterApp(QMainWindow):
         for i, axis in enumerate(['a', 'b', 'c']):
             self.translate_abc_inputs[axis] = self.translate_spinboxes[i]
         
-        # 初期状態をXYZに設定
-        for i, axis in enumerate(['X', 'Y', 'Z']):
-            self.translate_labels[i].setText(f"{axis}:")
-        
-        # モード切り替え時の処理
+        # [修正] モード切り替え時の処理（ヘッダーの単位表記も更新する）
         def update_translate_labels():
             is_xyz = self.translate_xyz_radio.isChecked()
             if is_xyz:
                 # XYZモード
+                self.translate_header_label.setText("Translation (Å):") # ラベル更新
                 for i, axis in enumerate(['X', 'Y', 'Z']):
                     self.translate_labels[i].setText(f"{axis}:")
             else:
                 # ABCモード
+                self.translate_header_label.setText("Translation (Fractional):") # ラベル更新
                 for i, axis in enumerate(['a', 'b', 'c']):
                     self.translate_labels[i].setText(f"{axis}:")
         
         self.translate_xyz_radio.toggled.connect(update_translate_labels)
+        
+        # 初期状態を適用
+        update_translate_labels()
         
         apply_translate_button = QPushButton("Apply Translation")
         apply_translate_button.clicked.connect(self.apply_translation)
         translate_layout.addWidget(apply_translate_button, 5, 0, 1, 2)
         self.group_tab_layout.addWidget(translate_group)
         
-        # 回転 (XYZ / ABC モード切り替え)
+        # --- [修正箇所 1] rotate_group 全体定義 ---
         rotate_group = QWidget()
         rotate_layout = QGridLayout(rotate_group)
-        rotate_layout.addWidget(QLabel("Rotation (degrees):"), 0, 0, 1, 2)
+        
+        # ヘッダー
+        rotate_layout.addWidget(QLabel("Rotation (degrees):"), 0, 0, 1, 3)
         
         # モード切り替えボタン
         self.rotate_mode_group = QButtonGroup(rotate_group)
         self.rotate_xyz_radio = QRadioButton("XYZ mode")
         self.rotate_abc_radio = QRadioButton("ABC mode")
-        self.rotate_xyz_radio.setChecked(True)
+        self.rotate_manual_radio = QRadioButton("Manual mode")
+        
+        self.rotate_abc_radio.setChecked(True)
         self.rotate_mode_group.addButton(self.rotate_xyz_radio)
         self.rotate_mode_group.addButton(self.rotate_abc_radio)
+        self.rotate_mode_group.addButton(self.rotate_manual_radio)
         
-        rotate_layout.addWidget(self.rotate_xyz_radio, 1, 0)
-        rotate_layout.addWidget(self.rotate_abc_radio, 1, 1)
+        rotate_layout.addWidget(self.rotate_abc_radio, 1, 0)
+        rotate_layout.addWidget(self.rotate_xyz_radio, 1, 1)
+        rotate_layout.addWidget(self.rotate_manual_radio, 1, 2)
         
         # 軸入力（共通ラベルとスピンボックス）
         self.rotate_labels = []
@@ -358,56 +380,88 @@ class CellSetterApp(QMainWindow):
             spinbox.setValue(0.0)
             spinbox.setSingleStep(1.0)
             spinbox.setDecimals(2)
+            
             rotate_layout.addWidget(label, i + 2, 0)
-            rotate_layout.addWidget(spinbox, i + 2, 1)
+            rotate_layout.addWidget(spinbox, i + 2, 1, 1, 2)
             self.rotate_labels.append(label)
             self.rotate_spinboxes.append(spinbox)
         
-        # XYZ/ABCの参照を設定
         for i, axis in enumerate(['X', 'Y', 'Z']):
             self.rotate_inputs[axis] = self.rotate_spinboxes[i]
         for i, axis in enumerate(['a', 'b', 'c']):
             self.rotate_abc_inputs[axis] = self.rotate_spinboxes[i]
         
-        # 初期状態をXYZに設定
-        for i, axis in enumerate(['X', 'Y', 'Z']):
-            self.rotate_labels[i].setText(f"Around {axis}:")
+        # --- [変更] Manualモード用の入力ウィジェット (カンマ区切り1ボックス) ---
+        from PyQt6.QtWidgets import QLineEdit
+        self.manual_input_widget = QWidget()
+        manual_layout = QHBoxLayout(self.manual_input_widget)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
         
-        # モード切り替え時の処理
+        # ラベルと入力ボックス
+        manual_layout.addWidget(QLabel("Axis (idx1, idx2):"))
+        self.manual_axis_edit = QLineEdit()
+        self.manual_axis_edit.setPlaceholderText("e.g., 0, 5") # 入力例を表示
+        manual_layout.addWidget(self.manual_axis_edit)
+        
+        # Row 5 に配置
+        rotate_layout.addWidget(self.manual_input_widget, 5, 0, 1, 3)
+        self.manual_input_widget.setVisible(False)
+        
+        # Applyボタン (Row 6)
+        apply_rotate_button = QPushButton("Apply Rotation")
+        apply_rotate_button.clicked.connect(self.apply_rotation)
+        rotate_layout.addWidget(apply_rotate_button, 6, 0, 1, 3)
+        
+        # 表示更新ロジック
         def update_rotate_labels():
             is_xyz = self.rotate_xyz_radio.isChecked()
+            is_manual = self.rotate_manual_radio.isChecked()
+            
+            self.manual_input_widget.setVisible(is_manual)
+            
+            for sb in self.rotate_spinboxes:
+                sb.setVisible(True)
+                sb.setEnabled(True)
+            for lbl in self.rotate_labels:
+                lbl.setVisible(True)
+
             if is_xyz:
-                # XYZモード
                 for i, axis in enumerate(['X', 'Y', 'Z']):
                     self.rotate_labels[i].setText(f"Around {axis}:")
+            elif is_manual:
+                self.rotate_labels[0].setText("Angle:")
+                # 2つ目以降を隠す
+                self.rotate_labels[1].setVisible(False)
+                self.rotate_spinboxes[1].setVisible(False)
+                self.rotate_labels[2].setVisible(False)
+                self.rotate_spinboxes[2].setVisible(False)
             else:
-                # ABCモード
                 for i, axis in enumerate(['a', 'b', 'c']):
                     self.rotate_labels[i].setText(f"Around {axis}:")
         
         self.rotate_xyz_radio.toggled.connect(update_rotate_labels)
+        self.rotate_manual_radio.toggled.connect(update_rotate_labels)
         
-        apply_rotate_button = QPushButton("Apply Rotation")
-        apply_rotate_button.clicked.connect(self.apply_rotation)
-        rotate_layout.addWidget(apply_rotate_button, 5, 0, 1, 2)
+        update_rotate_labels()
+        
         self.group_tab_layout.addWidget(rotate_group)
         
-        self.advanced_tab_layout.addSpacing(20)
+        self.view_tab_layout.addSpacing(20)
         
         # === View Controls ===
         view_label = QLabel("=== View Controls ===")
-        # View controls -> Advanced tab (option 3)
-        self.advanced_tab_layout.addWidget(view_label)
+        # View controls -> view tab (option 3)
+        self.view_tab_layout.addWidget(view_label)
 
         self.toggle_indices_button = QPushButton("Toggle Atom Indices")
         self.toggle_indices_button.clicked.connect(self.toggle_atom_indices)
         self.toggle_indices_button.setEnabled(False)
-        self.advanced_tab_layout.addWidget(self.toggle_indices_button)
+        self.view_tab_layout.addWidget(self.toggle_indices_button)
 
         self.reset_camera_button = QPushButton("Reset Camera")
         self.reset_camera_button.clicked.connect(self.reset_camera_view)
         self.reset_camera_button.setEnabled(False) 
-        self.advanced_tab_layout.addWidget(self.reset_camera_button)
+        self.view_tab_layout.addWidget(self.reset_camera_button)
 
         # Add tab widget to control_panel instead of the flat control layout
         control_layout.addWidget(self.control_tabs)
@@ -454,7 +508,7 @@ class CellSetterApp(QMainWindow):
                 else:
                     # MOLファイルの場合
                     # Auto-fit cell sizeでセルを作成
-                    self.optimize_cell_size()
+                    self.optimize_cell_size(draw=False)
                     # 分子をセルの中心に配置
                     cell = self.atoms.get_cell()
                     cell_center = (cell[0] + cell[1] + cell[2]) / 2.0
@@ -541,7 +595,7 @@ class CellSetterApp(QMainWindow):
                 
 
     # --- Auto-fit Cell Size: 現在の角度を保持してサイズのみ調整 ---
-    def optimize_cell_size(self):
+    def optimize_cell_size(self, draw=True):
         """現在のセル角度を保持し、分子が収まるようにa, b, cサイズのみを調整"""
         if self.atoms is None:
             return
@@ -607,8 +661,8 @@ class CellSetterApp(QMainWindow):
                 # 分子の範囲（末端原子の中心間距離）
                 molecule_span = max_coord_axis - min_coord_axis
                 
-                # 末端側にのみVdW半径を加算（最大側に加算）
-                required_size = molecule_span + max_atom_vdw
+                # 両端のVdW半径を加算する（最大側の半径 + 最小側の半径）
+                required_size = molecule_span + max_atom_vdw + min_atom_vdw
                 
                 # nan/infチェックと範囲制限
                 if not np.isfinite(required_size):
@@ -639,7 +693,8 @@ class CellSetterApp(QMainWindow):
             self.atoms.set_pbc(True)
             
             # カメラをリセットして再描画
-            self.update_cell_and_draw(force_reset=True)
+            if draw:
+                self.update_cell_and_draw(force_reset=True)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error during cell size optimization:\n{e}")
@@ -668,14 +723,12 @@ class CellSetterApp(QMainWindow):
         except Exception as e:
             print(f"Cell parameter error: {e}")
 
-    # --- [変更なし v14] draw_scene_manually (カメラの焦点を cell_center に設定) ---
-
+    # --- [修正] 原点Oを白で表示する機能を追加 ---
     def draw_scene_manually(self, force_reset=False, cell_center=(0.0, 0.0, 0.0), draw_supercell=None):
         if self.atoms is None:
             return
 
         # スーパーセル表示のためのatoms拡張
-        # draw_supercell が None の場合は UI の現在の状態を参照
         show_supercell = draw_supercell if draw_supercell is not None else getattr(self, '_supercell_params', (False, 1, 1, 1))[0]
         n_a = getattr(self, '_supercell_params', (False, 1, 1, 1))[1]
         n_b = getattr(self, '_supercell_params', (False, 1, 1, 1))[2]
@@ -690,14 +743,11 @@ class CellSetterApp(QMainWindow):
                 print(f"Supercell error: {e}")
                 atoms_to_draw = self.atoms
         else:
-            # 非スーパーセル表示ではセル内だけを描画するため、セル内にfoldしたコピーを使う
             try:
                 atoms_to_draw = self.atoms.copy()
-                # wrap が PBC を前提とするため、万一 PBC が設定されていない場合は wrap を行わない
                 if atoms_to_draw.pbc.any():
                     atoms_to_draw.wrap(pbc=atoms_to_draw.pbc)
             except Exception:
-                # 何らかの問題があれば元の atoms を描画
                 atoms_to_draw = self.atoms
 
         if not force_reset and self.plotter.camera:
@@ -719,6 +769,22 @@ class CellSetterApp(QMainWindow):
             specular_power=20,
             lighting=True,
         )
+
+        # --- [追加] 原点(0,0,0)の表示 ---
+        try:
+            
+            # "O" ラベルを表示
+            self.plotter.add_point_labels(
+                [np.array([0.0, 0.0, 0.0])], ["O"],
+                point_size=0,
+                font_size=16,
+                text_color='white',
+                always_visible=True,
+                shape=None,
+                show_points=False
+            )
+        except Exception as e:
+            print(f"Failed to draw origin: {e}")
 
         symbols = atoms_to_draw.get_chemical_symbols()
         positions = atoms_to_draw.get_positions()
@@ -790,11 +856,10 @@ class CellSetterApp(QMainWindow):
                 combined_bonds = pv.MultiBlock(bond_cylinders).combine()
                 self.plotter.add_mesh(combined_bonds, color='grey', **mesh_props)
         except Exception as e:
-            print(f"Failed to draw bonds: {e}")
+            # print(f"Failed to draw bonds: {e}") # 結合がない場合などは無視
             pass
 
         # --- 2.5. 原子インデックスをラベル表示 ---
-        # スーパーセル表示時は番号ラベルを消す
         if self.show_atom_indices and len(positions) > 0 and not (show_supercell and (n_a > 1 or n_b > 1 or n_c > 1)):
             for i, pos in enumerate(positions):
                 self.plotter.add_point_labels(
@@ -806,8 +871,7 @@ class CellSetterApp(QMainWindow):
                     shape=None
                 )
 
-        # --- 3. セル（単位格子）を描画 (手動) ---
-        # 通常セルのみ描画（スーパーセル枠は今は描かない）
+        # --- 3. セル（単位格子）を描画 ---
         if self.atoms.pbc.any():
             cell_matrix = self.atoms.get_cell()
             origin = np.array([0.0, 0.0, 0.0])
@@ -876,28 +940,41 @@ class CellSetterApp(QMainWindow):
         cell_center = np.array([0.0, 0.0, 0.0])
         self.draw_scene_manually(force_reset=True, cell_center=cell_center)
 
-    # --- [変更なし v16] 座標最適化 (Wrap) 機能 ---
+    # --- [修正箇所] optimize_coordinate (単純なセンタリングのみに変更) ---
     def optimize_coordinate(self):
-        """原子をセル内に折りたたむ (wrap)"""
+        """
+        分子の重心をセルの中心へ移動する（Wrap処理は行わない）。
+        """
         if self.atoms is None:
             return
         
         if not self.atoms.pbc.any():
-            QMessageBox.warning(self, "Warning", "Cell is not set. Cannot wrap atoms.")
+            QMessageBox.warning(self, "Warning", "Cell is not set.")
             return
             
         try:
-            # wrap() を実行して原子をセル内に移動
-            self.atoms.wrap(pbc=self.atoms.pbc)
+            # 1. 分子の重心を取得
+            mol_center = self.atoms.get_center_of_mass()
             
-            # 原点基準で再描画
-            cell_center = np.array([0.0, 0.0, 0.0])
-            self.draw_scene_manually(force_reset=False, cell_center=cell_center)
+            # 2. セルの中心座標を計算 (ベクトルa + b + c) / 2
+            cell = self.atoms.get_cell()
+            cell_center = (cell[0] + cell[1] + cell[2]) / 2.0
             
-            QMessageBox.information(self, "Success", "Atoms wrapped into cell successfully.")
+            # 3. 移動ベクトル (セル中心 - 分子重心)
+            shift_vector = cell_center - mol_center
+            
+            # 4. 平行移動適用
+            self.atoms.positions += shift_vector
+            
+            # 5. 再描画 (原点基準)
+            cell_center_origin = np.array([0.0, 0.0, 0.0])
+            self.draw_scene_manually(force_reset=False, cell_center=cell_center_origin)
+            
+            # メッセージ（任意）
+            # QMessageBox.information(self, "Success", "Moved molecule to cell center.")
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to optimize coordinates:\n{e}")
+            QMessageBox.critical(self, "Error", f"Failed to shift molecule:\n{e}")
     
     # --- [追加 v19] 原子インデックス表示切替 ---
     def toggle_atom_indices(self):
@@ -946,9 +1023,9 @@ class CellSetterApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to apply translation:\n{e}")
     
-    # --- [追加 v20] 回転機能 (XYZ/ABCモード対応) ---
+    # --- [修正箇所 2] apply_rotation メソッドの修正 ---
     def apply_rotation(self):
-        """指定された角度だけ分子を回転（XYZモード: 指定原子中心、ABCモード: 軸上原子基準）"""
+        """指定された角度だけ分子を回転（XYZモード、ABCモード、Manualモード）"""
         if self.atoms is None:
             return
         
@@ -990,6 +1067,73 @@ class CellSetterApp(QMainWindow):
                     self.atoms.positions = rotation.apply(self.atoms.positions)
                     
                     self.atoms.positions += center
+
+            elif self.rotate_manual_radio.isChecked():
+                # --- Manualモード：カンマ区切りテキストを使用 ---
+                
+                angle_deg = self.rotate_inputs['X'].value()
+                # 角度が0の場合は何もしない
+                if abs(angle_deg) < 1e-6:
+                    return
+
+                try:
+                    # テキストを取得してカンマで分割
+                    text = self.manual_axis_edit.text().strip()
+                    if not text:
+                        return
+                    
+                    parts = [x.strip() for x in text.split(',')]
+                    
+                    if len(parts) != 2:
+                        raise ValueError("Please enter exactly two indices (e.g., '0, 5').")
+                    
+                    # 整数変換
+                    idx1 = int(parts[0])
+                    idx2 = int(parts[1])
+                    
+                    if not (0 <= idx1 < len(self.atoms) and 0 <= idx2 < len(self.atoms)):
+                        raise ValueError(f"Indices must be between 0 and {len(self.atoms)-1}.")
+                    
+                    if idx1 == idx2:
+                        raise ValueError("Atom indices must be different.")
+                    
+                    # --- [重要な修正] 座標操作の安定化 ---
+                    # 1. 現在の全座標のコピーを取得（直接操作による副作用を防ぐ）
+                    positions = self.atoms.get_positions()
+                    
+                    p1 = positions[idx1]
+                    p2 = positions[idx2]
+                    
+                    # 2. 回転軸ベクトル
+                    vec = p2 - p1
+                    norm = np.linalg.norm(vec)
+                    if norm < 1e-6:
+                        raise ValueError("Selected atoms are at the same position.")
+                    axis_direction = vec / norm
+                    
+                    # 3. 回転中心を「2原子の中点」に設定 (これにより不自然な振れを防ぐ)
+                    rotation_center = (p1 + p2) / 2.0
+                    
+                    # 4. 回転適用
+                    angle_rad = np.radians(angle_deg)
+                    
+                    # 中心を原点へ移動
+                    positions -= rotation_center
+                    
+                    # 回転行列の適用
+                    rotation = Rotation.from_rotvec(angle_rad * axis_direction)
+                    positions = rotation.apply(positions)
+                    
+                    # 元の位置へ戻す
+                    positions += rotation_center
+                    
+                    # 5. 座標を更新
+                    self.atoms.set_positions(positions)
+                    
+                    
+                except ValueError as e:
+                    QMessageBox.warning(self, "Input Error", str(e))
+                    return
                     
             else:
                 # ABCモード：セル軸周りに回転（軸上の原子を基準）
@@ -1016,7 +1160,7 @@ class CellSetterApp(QMainWindow):
                         axis_direction = cell_vector / np.linalg.norm(cell_vector)
                         
                         # この軸上の原子を検出
-                        tolerance = 0.1  # 軸からの許容距離（Å）
+                        tolerance = 0.01  # 軸からの許容距離（Å）
                         positions = self.atoms.get_positions()
                         atoms_on_axis = []
                         
@@ -1061,9 +1205,12 @@ class CellSetterApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to apply rotation:\n{e}")
     # --- ここまで ---
     
-    # --- [追加 v22] 複数原子固定＆セル内収納機能 ---
     def fix_atom0_and_fit(self):
-        """ABC軸のいずれかに乗っている複数原子を自動検出して固定し、軸周りに回転してセル内に収める"""
+        """
+        ABC軸、またはABC面のいずれかに乗っている原子群を検出し、
+        その位置を固定したまま、回転のみを行ってセル内に収める（平行移動なし）。
+        マニュアルで2原子指定時は、その2原子を結ぶ軸周りに回転する。
+        """
         if self.atoms is None:
             return
         
@@ -1072,144 +1219,218 @@ class CellSetterApp(QMainWindow):
             return
         
         try:
-            # セル情報を取得
             cell = self.atoms.get_cell()
             positions = self.atoms.get_positions()
+            tolerance = 0.01
             
-            # 各セル軸について、軸上に乗っている原子を検出
-            tolerance = 0.1  # 軸からの許容距離（Å）
-            
-            axis_candidates = []
+            candidates = []
+
+            # --- 1. 軸上の原子検出 (変更なし) ---
             for axis_idx in range(3):
                 axis_vector = cell[axis_idx]
-                axis_direction = axis_vector / np.linalg.norm(axis_vector)
+                axis_len = np.linalg.norm(axis_vector)
+                if axis_len < 1e-6: continue
+                axis_direction = axis_vector / axis_len
                 
-                # 各原子について、軸からの垂直距離を計算
                 atoms_on_axis = []
                 for atom_idx, pos in enumerate(positions):
-                    # 軸方向への射影
                     projection = np.dot(pos, axis_direction) * axis_direction
-                    # 軸からの垂直距離
-                    perpendicular = pos - projection
-                    distance = np.linalg.norm(perpendicular)
-                    
-                    if distance < tolerance:
+                    dist = np.linalg.norm(pos - projection)
+                    if dist < tolerance:
                         atoms_on_axis.append(atom_idx)
                 
-                if len(atoms_on_axis) >= 2:  # 最低2個の原子が軸上にある
-                    axis_candidates.append({
-                        'axis_idx': axis_idx,
-                        'axis_name': ['a-axis', 'b-axis', 'c-axis'][axis_idx],
-                        'atoms': atoms_on_axis,
-                        'count': len(atoms_on_axis)
+                if len(atoms_on_axis) >= 2:
+                    candidates.append({
+                        'type': 'axis', 'index_1': axis_idx, 'index_2': None,
+                        'name': ['a-axis', 'b-axis', 'c-axis'][axis_idx],
+                        'atoms': atoms_on_axis, 'count': len(atoms_on_axis), 'vector': axis_direction
                     })
-            
-            # 軸上の原子が見つからない場合はエラー
-            if len(axis_candidates) == 0:
-                error_msg = (
-                    f"No atoms found on any cell axis within {tolerance}Å tolerance.\n\n"
-                    "Please ensure atoms are aligned to one of the cell axes (a, b, or c)\n"
-                    "before using this function."
+
+            # --- 2. 面上の原子検出 (変更なし) ---
+            plane_pairs = [(0, 1, 'ab-plane'), (1, 2, 'bc-plane'), (0, 2, 'ac-plane')]
+            for idx1, idx2, plane_name in plane_pairs:
+                vec1 = cell[idx1]
+                vec2 = cell[idx2]
+                normal_vec = np.cross(vec1, vec2)
+                norm_len = np.linalg.norm(normal_vec)
+                if norm_len < 1e-6: continue
+                normal_dir = normal_vec / norm_len
+                
+                projected_coords = np.dot(positions, normal_dir)
+                atom_heights = [{'idx': i, 'h': h} for i, h in enumerate(projected_coords)]
+                atom_heights.sort(key=lambda x: x['h'])
+                
+                current_group = []
+                if atom_heights:
+                    current_group.append(atom_heights[0])
+                    for i in range(1, len(atom_heights)):
+                        curr = atom_heights[i]
+                        prev = atom_heights[i-1]
+                        if abs(curr['h'] - prev['h']) < tolerance:
+                            current_group.append(curr)
+                        else:
+                            if len(current_group) >= 3:
+                                heights = [x['h'] for x in current_group]
+                                mean_h = sum(heights) / len(heights)
+                                valid_indices = [x['idx'] for x in current_group if abs(x['h'] - mean_h) < tolerance]
+                                if len(valid_indices) >= 3:
+                                    candidates.append({
+                                        'type': 'plane', 'index_1': idx1, 'index_2': idx2, 'name': plane_name,
+                                        'atoms': valid_indices, 'count': len(valid_indices), 'vector': normal_dir
+                                    })
+                            current_group = [curr]
+                    
+                    if len(current_group) >= 3:
+                        heights = [x['h'] for x in current_group]
+                        mean_h = sum(heights) / len(heights)
+                        valid_indices = [x['idx'] for x in current_group if abs(x['h'] - mean_h) < tolerance]
+                        if len(valid_indices) >= 3:
+                            candidates.append({
+                                'type': 'plane', 'index_1': idx1, 'index_2': idx2, 'name': plane_name,
+                                'atoms': valid_indices, 'count': len(valid_indices), 'vector': normal_dir
+                            })
+
+            best_candidate = None
+            force_manual = False
+
+            # --- 3. 候補選択 (変更なし) ---
+            if len(candidates) > 0:
+                temp_candidate = max(candidates, key=lambda x: x['count'])
+                msg = QMessageBox(self)
+                msg.setWindowTitle(f"Auto-detected Atoms on {temp_candidate['name']}")
+                atom_list = ', '.join(map(str, temp_candidate['atoms'][:10]))
+                if len(temp_candidate['atoms']) > 10: atom_list += "..."
+                msg.setText(f"Detected {len(temp_candidate['atoms'])} atoms on {temp_candidate['name']}.\nIndices: {atom_list}")
+                msg.setInformativeText("Select action:")
+                btn_auto = msg.addButton("Use Auto-Detected", QMessageBox.ButtonRole.AcceptRole)
+                btn_manual = msg.addButton("Manual Select", QMessageBox.ButtonRole.ActionRole)
+                btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+                msg.exec()
+                
+                if msg.clickedButton() == btn_cancel:
+                    return
+                elif msg.clickedButton() == btn_manual:
+                    force_manual = True
+                    best_candidate = None
+                else:
+                    best_candidate = temp_candidate
+
+            # --- 4. マニュアル選択 (修正: セル軸へのスナップをやめ、カスタム軸として扱う) ---
+            if len(candidates) == 0 or force_manual:
+                text, ok = QInputDialog.getText(
+                    self, "Manual Selection", 
+                    "Please manually enter 2 atom indices to define the fixed rotation axis.\n"
+                    "(Atoms will NOT move; molecule rotates around the line connecting them.)"
                 )
-                QMessageBox.critical(self, "Error", error_msg)
+                if not ok or not text.strip(): return
+                try:
+                    manual_indices = [int(x.strip()) for x in text.split(',') if x.strip()]
+                    if len(manual_indices) != 2: raise ValueError("Please enter exactly two indices.")
+                    idx1, idx2 = manual_indices
+                    if not (0 <= idx1 < len(self.atoms) and 0 <= idx2 < len(self.atoms)):
+                        raise ValueError("Indices out of range.")
+                    
+                    p1 = positions[idx1]
+                    p2 = positions[idx2]
+                    vec = p2 - p1
+                    vec_len = np.linalg.norm(vec)
+                    if vec_len < 1e-6: raise ValueError("Atoms are at the same position.")
+                    vec_dir = vec / vec_len
+
+                    # 以前の「最も近い軸を探す」処理を廃止し、ユーザー定義ベクトルをそのまま使う
+                    best_candidate = {
+                        'type': 'manual_axis',
+                        'name': 'Custom Vector',
+                        'atoms': manual_indices,
+                        'count': 2,
+                        'vector': vec_dir
+                    }
+                    
+                    QMessageBox.information(self, "Manual Mode", f"Aligning around defined 2-atom vector.")
+
+                except ValueError as e:
+                    QMessageBox.warning(self, "Input Error", str(e))
+                    return
+
+            # --- 5. 最適化処理 (修正: カスタム軸対応) ---
+            if best_candidate is None:
                 return
-            
-            # 最も多くの原子が乗っている軸を選択
-            best_candidate = max(axis_candidates, key=lambda x: x['count'])
-            cell_axis_idx = best_candidate['axis_idx']
-            axis_name = best_candidate['axis_name']
+
+            detect_type = best_candidate['type']
+            rotation_axis_vec = best_candidate['vector']
             fixed_indices = best_candidate['atoms']
             
-            # 確認メッセージ
-            atom_list = ', '.join(map(str, fixed_indices[:10]))
-            if len(fixed_indices) > 10:
-                atom_list += f", ... ({len(fixed_indices)} total)"
-            
-            reply = QMessageBox.question(
-                self,
-                "Auto-detected Atoms on Axis",
-                f"Detected {len(fixed_indices)} atoms on {axis_name}:\n"
-                f"Atom indices: {atom_list}\n\n"
-                f"Continue with rotation optimization?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-            
-            # セル軸ベクトルを設定
-            cell_vector = cell[cell_axis_idx]
-            target_direction = cell_vector / np.linalg.norm(cell_vector)
-            
-            # 他の2軸のインデックス
-            other_axes = [i for i in range(3) if i != cell_axis_idx]
-            
-            # 固定原子群の重心を計算（軸方向の座標）
-            fixed_positions = self.atoms.positions[fixed_indices]
-            fixed_centroid = fixed_positions.mean(axis=0)
-            rotation_center_coord = np.dot(fixed_centroid, target_direction)
-            rotation_center = rotation_center_coord * target_direction
-            
-            # 最適な回転角を探索
+            if detect_type == 'axis':
+                axis_idx = best_candidate['index_1']
+                check_axes_indices = [i for i in range(3) if i != axis_idx]
+                # 回転中心: 重心の軸への射影点
+                fixed_positions = self.atoms.positions[fixed_indices]
+                fixed_centroid = fixed_positions.mean(axis=0)
+                center_coord = np.dot(fixed_centroid, rotation_axis_vec)
+                rotation_center = center_coord * rotation_axis_vec
+                
+            elif detect_type == 'plane':
+                check_axes_indices = [best_candidate['index_1'], best_candidate['index_2']]
+                # 回転中心: 面上の原子の重心
+                fixed_positions = self.atoms.positions[fixed_indices]
+                rotation_center = fixed_positions.mean(axis=0)
+                
+            else: # 'manual_axis' (Custom Vector)
+                # 斜めの軸などの可能性があるため、全方向のはみ出しをチェック対象にする
+                check_axes_indices = [0, 1, 2]
+                # 回転中心: 指定2原子の重心（または軸上の任意の点）
+                fixed_positions = self.atoms.positions[fixed_indices]
+                rotation_center = fixed_positions.mean(axis=0)
+
+            # 回転角の探索
             best_angle = 0.0
             min_overflow = float('inf')
             
-            # 0度から360度まで5度刻みで試行
+            # 探索ステップ
             for test_angle_deg in range(0, 360, 5):
                 test_angle = np.radians(test_angle_deg)
                 
-                # テスト回転を適用
                 test_positions = self.atoms.positions.copy()
                 test_positions -= rotation_center
                 
-                # 軸周りに回転
-                test_rotation = Rotation.from_rotvec(test_angle * target_direction)
+                # 指定された軸（ベクトル）周りに回転
+                test_rotation = Rotation.from_rotvec(test_angle * rotation_axis_vec)
                 test_positions = test_rotation.apply(test_positions)
                 test_positions += rotation_center
                 
-                # 他の2軸方向のはみ出しを計算
                 overflow = 0.0
-                for other_idx in other_axes:
-                    other_vector = cell[other_idx]
-                    other_direction = other_vector / np.linalg.norm(other_vector)
-                    other_size = np.linalg.norm(other_vector)
+                for check_idx in check_axes_indices:
+                    check_vector = cell[check_idx]
+                    check_size = np.linalg.norm(check_vector)
+                    check_direction = check_vector / check_size
                     
-                    # この軸方向の座標
-                    coords = np.dot(test_positions, other_direction)
+                    coords = np.dot(test_positions, check_direction)
                     
+                    # セル範囲 (0 ~ check_size) からのはみ出し量
                     overflow += max(0, -coords.min())
-                    overflow += max(0, coords.max() - other_size)
+                    overflow += max(0, coords.max() - check_size)
                 
                 if overflow < min_overflow:
                     min_overflow = overflow
                     best_angle = test_angle
             
-            # 最適な角度で回転を適用
+            # 最適な回転を適用（シフトなし）
             if abs(best_angle) > 1e-6:
                 self.atoms.positions -= rotation_center
-                optimal_rotation = Rotation.from_rotvec(best_angle * target_direction)
+                optimal_rotation = Rotation.from_rotvec(best_angle * rotation_axis_vec)
                 self.atoms.positions = optimal_rotation.apply(self.atoms.positions)
                 self.atoms.positions += rotation_center
             
-            # 軸方向の一番下の原子がセルの下端（0）に来るように平行移動
-            final_positions = self.atoms.positions
-            axis_coords = np.dot(final_positions, target_direction)
-            axis_min = axis_coords.min()
-            # 必要な平行移動量（axis_minが0になるように）
-            shift_correction = -axis_min * target_direction
-            self.atoms.positions += shift_correction
-            
-            # 再描画
             cell_center = np.array([0.0, 0.0, 0.0])
             self.draw_scene_manually(force_reset=False, cell_center=cell_center)
             
-            QMessageBox.information(self, "Success", f"Molecule fitted with {len(fixed_indices)} atoms fixed on {axis_name}.")
+            msg_suffix = f" ({'Manual' if force_manual else 'Auto'})"
+            QMessageBox.information(self, "Success", f"Molecule fitted on {best_candidate['name']}{msg_suffix} (Fixed position).")
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to fit molecule:\n{e}")
-    # --- ここまで ---
     
     # --- [変更 v19] 分子配置機能 (複数原子指定対応) ---
     def fit_molecule_to_cell(self):

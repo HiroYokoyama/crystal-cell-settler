@@ -1,7 +1,6 @@
 # CelleditPy — A Python Crystal Cell Editor
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17620152.svg)](https://doi.org/10.5281/zenodo.17620152)![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
-
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17620125.svg)](https://doi.org/10.5281/zenodo.17620125)
 
 `CelleditPy` is a Python-based GUI application designed for crystallographers and computational chemists. It provides a visual, interactive environment to load molecular structures (from `.mol` or `.cif` files), define or adjust unit cell parameters, and reposition the molecule within the cell before saving the result as a `.cif` file.
 
@@ -58,7 +57,7 @@ This will launch the main application window.
 
 ## License
 
-This project is licensed under the Apache-2.0 License. See the `LICENSE` file for details.
+This project is licensed under the GNU General Public License v3.0 (GPL-v3) License. See the `LICENSE` file for details.
 
 ## Author
 

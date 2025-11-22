@@ -10,7 +10,7 @@ Repo: https://github.com/HiroYokoyama/crystal-cell-setter
 DOI 10.5281/zenodo.17620125
 """
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 import sys
 import numpy as np
@@ -833,30 +833,33 @@ class CellSetterApp(QMainWindow):
             matrix = neighbor_list.get_connectivity_matrix()
             coo = matrix.tocoo()
             bond_radius = 0.10
-            bond_resolution = 16
-            bond_cylinders = []
-            for i, j in zip(coo.row, coo.col):
-                if i >= j:
-                    continue
-                sp = positions[i]
-                ep = positions[j]
-                d = ep - sp 
-                h = np.linalg.norm(d) 
-                if h == 0: continue
-                mid_point = (sp + ep) / 2
-                cyl1 = pv.Cylinder(center=(sp + mid_point) / 2, direction=d, 
-                                   radius=bond_radius, height=h/2, 
-                                   resolution=bond_resolution)
-                cyl2 = pv.Cylinder(center=(mid_point + ep) / 2, direction=d, 
-                                   radius=bond_radius, height=h/2, 
-                                   resolution=bond_resolution)
-                bond_cylinders.append(cyl1)
-                bond_cylinders.append(cyl2)
-            if bond_cylinders:
-                combined_bonds = pv.MultiBlock(bond_cylinders).combine()
-                self.plotter.add_mesh(combined_bonds, color='grey', **mesh_props)
+            
+            if coo.nnz > 0:
+                # 重複を除去 (i < j のみ採用)
+                mask = coo.row < coo.col
+                rows = coo.row[mask]
+                cols = coo.col[mask]
+                
+                if len(rows) > 0:
+                    # ラインの頂点リストを作成
+                    # lines format: [2, p1_idx, p2_idx, 2, p3_idx, p4_idx, ...]
+                    lines = np.empty((len(rows), 3), dtype=int)
+                    lines[:, 0] = 2
+                    lines[:, 1] = rows
+                    lines[:, 2] = cols
+                    lines = lines.flatten()
+                    
+                    # PolyDataを作成
+                    bond_mesh = pv.PolyData(positions)
+                    bond_mesh.lines = lines
+                    
+                    # チューブ化
+                    tube = bond_mesh.tube(radius=bond_radius, n_sides=16)
+                    
+                    self.plotter.add_mesh(tube, color='grey', **mesh_props)
+
         except Exception as e:
-            # print(f"Failed to draw bonds: {e}") # 結合がない場合などは無視
+            print(f"Failed to draw bonds: {e}") 
             pass
 
         # --- 2.5. 原子インデックスをラベル表示 ---

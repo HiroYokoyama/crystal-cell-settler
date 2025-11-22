@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: CelleditPy
-Version: 0.2.0
+Version: 0.2.1
 Summary: A GUI tool to set and adjust unit cell parameters for molecular structures.
 Author-email: HiroYokoyama <titech.yoko.hiro@gmail.com>
 License:                     GNU GENERAL PUBLIC LICENSE

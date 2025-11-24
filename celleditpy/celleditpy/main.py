@@ -10,7 +10,7 @@ Repo: https://github.com/HiroYokoyama/crystal-cell-setter
 DOI 10.5281/zenodo.17620125
 """
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 import sys
 import numpy as np
@@ -18,7 +18,7 @@ import pyvista as pv
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QLabel, QGridLayout, QDoubleSpinBox,
-    QMessageBox, QSizePolicy, QInputDialog
+    QMessageBox, QSizePolicy, QInputDialog, QComboBox
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
@@ -54,6 +54,22 @@ CPK_COLORS = {
     'Zr': QColor('#7EE7E7'), 'Nb': QColor('#68CFCE'), 'Mo': QColor('#52B7B7'), 'DEFAULT': QColor('#FF1493') # Pink fallback
 }
 
+
+
+class CustomQtInteractor(QtInteractor):
+    def __init__(self, parent=None, main_window=None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.main_window = main_window
+        # Track recent clicks so we can detect and swallow triple-clicks
+        self._last_click_time = 0.0
+        self._click_count = 0
+
+    def mouseDoubleClickEvent(self, event):
+        """Ignore mouse double-clicks on the 3D widget to avoid accidental actions."""
+        try:
+            event.accept()
+        except Exception:
+            return
 
 class CellSetterApp(QMainWindow):
     def update_supercell_display(self):
@@ -122,12 +138,18 @@ class CellSetterApp(QMainWindow):
         self.main_tab_layout.setSpacing(6)
         self.control_tabs.addTab(self.main_tab, "Main")
 
-        # Group Control tab (structure/group level operations)
+        # Structure Control tab (structure/group level operations)
         self.group_tab = QWidget()
         self.group_tab_layout = QVBoxLayout(self.group_tab)
         self.group_tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.group_tab_layout.setSpacing(6)
-        self.control_tabs.addTab(self.group_tab, "Group Control")
+        self.control_tabs.addTab(self.group_tab, "Structure Control")
+        
+        # --- Group Control UI ---
+        self.group_control_btn = QPushButton("Open Group Control")
+        self.group_control_btn.clicked.connect(self.open_group_control)
+        self.group_tab_layout.addWidget(self.group_control_btn)
+        self.group_tab_layout.addSpacing(20)
 
         # view tab (view transforms / optimization)
         self.view_tab = QWidget()
@@ -230,7 +252,6 @@ class CellSetterApp(QMainWindow):
         # --- 原子削除ボタン ---
         self.delete_atom_button = QPushButton("Delete Atom(s)")
         self.delete_atom_button.clicked.connect(self.delete_atoms_dialog)
-        self.delete_atom_button.setEnabled(False)
         self.main_tab_layout.addWidget(self.delete_atom_button)
 
         self.main_tab_layout.addSpacing(20)
@@ -461,19 +482,90 @@ class CellSetterApp(QMainWindow):
         self.reset_camera_button = QPushButton("Reset Camera")
         self.reset_camera_button.clicked.connect(self.reset_camera_view)
         self.reset_camera_button.setEnabled(False) 
+        self.reset_camera_button.setEnabled(False) 
+        self.reset_camera_button.setEnabled(False) 
         self.view_tab_layout.addWidget(self.reset_camera_button)
+
+        # --- Camera Axis Buttons ---
+        camera_axis_group = QWidget()
+        camera_axis_layout = QGridLayout(camera_axis_group)
+        
+        self.camera_buttons = {}
+        axes_labels = ['a', 'b', 'c', 'a*', 'b*', 'c*']
+        
+        for i, label in enumerate(axes_labels):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda checked, l=label: self.set_camera_along_axis(l))
+            btn.setEnabled(False)
+            camera_axis_layout.addWidget(btn, i // 3, i % 3)
+            self.camera_buttons[label] = btn
+            
+        self.view_tab_layout.addWidget(camera_axis_group)
+
+
 
         # Add tab widget to control_panel instead of the flat control layout
         control_layout.addWidget(self.control_tabs)
         main_layout.addWidget(control_panel)
 
         # --- 2. 右側：3Dビュー (PyVista) ---
-        self.plotter = QtInteractor(main_widget)
+        # --- 2. 右側：3Dビュー (PyVista) ---
+        self.plotter = CustomQtInteractor(main_widget, main_window=self)
         self.plotter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         main_layout.addWidget(self.plotter)
         
         self.plotter.set_background('#919191')
         self.plotter.add_axes()
+        
+        # Set orthogonal (parallel) projection instead of perspective
+        self.plotter.enable_parallel_projection()
+
+        # Track whether we've explicitly enabled point picking on the plotter
+        # Using an application-level flag ensures we won't call enable twice
+        # and will disable when dialogs that use picking are closed.
+        self._plotter_picking_enabled = False
+
+    def enable_plot_picking(self):
+        """Enable point picking on the plotter safely.
+
+        This method first disables any existing picking (if supported by the
+        backend) to avoid PyVista errors when enabling point picking multiple
+        times. It also sets a flag so we don't repeatedly enable.
+        """
+        try:
+            # If the plotter supports disable_picking, call it to reset state.
+            if hasattr(self.plotter, 'disable_picking'):
+                try:
+                    self.plotter.disable_picking()
+                except Exception:
+                    # Ignore errors while trying to disable previous picking
+                    pass
+
+            if hasattr(self.plotter, 'enable_point_picking'):
+                self.plotter.enable_point_picking(
+                    callback=self.on_atom_picked,
+                    show_message=False,
+                    left_clicking=True,
+                    show_point=False
+                )
+
+                self._plotter_picking_enabled = True
+        except Exception as e:
+            print(f"Failed to enable point picking: {e}")
+
+    def disable_plot_picking(self):
+        """Disable point picking on the plotter safely and clear flag."""
+        try:
+            if hasattr(self.plotter, 'disable_picking'):
+                try:
+                    self.plotter.disable_picking()
+                except Exception:
+                    pass
+            self._plotter_picking_enabled = False
+        except Exception:
+            # If anything goes wrong, just ignore it — we don't want to
+            # crash the UI for a non-critical cleanup operation.
+            pass
 
     def _set_spinbox_values(self, params_dict):
         """セルパラメータ辞書からSpinBoxの値を設定する"""
@@ -484,6 +576,21 @@ class CellSetterApp(QMainWindow):
                 value = max(spinbox.minimum(), min(spinbox.maximum(), value))
                 spinbox.setValue(value)
             spinbox.blockSignals(False)
+
+    def _min_image_cart_offset(self, p1, p2):
+        """Return the minimum-image cartesian offset from p1 to p2 using current cell.
+
+        This ensures we consider the nearest periodic image when computing vectors
+        between atoms under PBC.
+        """
+        cell = self.atoms.get_cell()
+        inv_cell = np.linalg.inv(cell)
+        s1 = p1.dot(inv_cell)
+        s2 = p2.dot(inv_cell)
+        delta_s = s2 - s1
+        # Bring differences into -0.5..0.5 range
+        delta_s -= np.round(delta_s)
+        return delta_s.dot(cell)
 
     def load_mol_file(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -515,7 +622,9 @@ class CellSetterApp(QMainWindow):
                     mol_center = self.atoms.get_center_of_mass()
                     self.atoms.positions += (cell_center - mol_center)
                     # 再描画
-                    self.draw_scene_manually(force_reset=False, cell_center=np.array([0.0, 0.0, 0.0])) 
+                    self.draw_scene_manually(force_reset=False, cell_center=np.array([0.0, 0.0, 0.0]))
+                    # Reset camera for MOL files
+                    self.reset_camera_view()
 
                 self.save_button.setEnabled(True)
                 self.optimize_button.setEnabled(True) 
@@ -530,11 +639,21 @@ class CellSetterApp(QMainWindow):
                 # [追加 v20] Transform controls
                 for spinbox in self.translate_spinboxes:
                     spinbox.setEnabled(True)
+                for spinbox in self.translate_spinboxes:
+                    spinbox.setEnabled(True)
                 for spinbox in self.rotate_spinboxes:
                     spinbox.setEnabled(True)
+                
 
                 if not (file_name.endswith('.mol') or file_name.endswith('.MOL')):
                      self.update_cell_and_draw(force_reset=True)
+
+                # Enable Camera Buttons
+                for btn in self.camera_buttons.values():
+                    btn.setEnabled(True)
+                
+                # Enable picking safely (disable any previous one first)
+                self.enable_plot_picking()
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
@@ -549,33 +668,87 @@ class CellSetterApp(QMainWindow):
                 self.fix_atom0_button.setEnabled(False) # [追加 v22]
                 self.delete_atom_button.setEnabled(False)
     
-                # [追加 v20] Transform controls
-                for spinbox in self.translate_spinboxes:
-                    spinbox.setEnabled(False)
-                for spinbox in self.rotate_spinboxes:
-                    spinbox.setEnabled(False)
+
+
+
+
 
     def delete_atoms_dialog(self):
-        """原子インデックスを入力して削除するダイアログ"""
+        """原子インデックスを入力して削除するダイアログ（インタラクティブ選択）"""
         if self.atoms is None:
             return
-        from PyQt6.QtWidgets import QInputDialog, QMessageBox
-        text, ok = QInputDialog.getText(self, "Delete Atom(s)", f"Enter atom index or indices (comma-separated, 0-{len(self.atoms)-1}):", text="0")
-        if not ok or not text.strip():
-            return
+            
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+        
+        self.delete_picking_dialog = QDialog(self)
+        self.delete_picking_dialog.setWindowTitle("Delete Atoms")
+        self.delete_picking_dialog.setModal(False)
+        layout = QVBoxLayout(self.delete_picking_dialog)
+        
+        layout.addWidget(QLabel("Select atoms to delete by clicking in 3D view."))
+        
+        self.selection_info_label = QLabel("Selected: 0 atoms")
+        layout.addWidget(self.selection_info_label)
+        
+        self.selected_delete_indices = set()
+        
+        btn_layout = QHBoxLayout()
+        delete_btn = QPushButton("Delete Selected")
+        delete_btn.clicked.connect(self.execute_delete_atoms)
+        btn_layout.addWidget(delete_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.delete_picking_dialog.close)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        self.delete_picking_dialog.finished.connect(self.on_delete_dialog_closed)
+        self.delete_picking_dialog.show()
+        
+        # Start picking
+        self.start_delete_picking()
+        
+    def start_delete_picking(self):
+        self.selected_delete_indices = set()
+        self.update_delete_selection_display()
+        self.picking_callback = self.delete_picking_callback
+        # Make sure the plotter's picking is enabled when starting a delete session
         try:
-            indices = []
-            for part in text.split(','):
-                idx = int(part.strip())
-                if idx < 0 or idx >= len(self.atoms):
-                    raise ValueError(f"Index {idx} out of range.")
-                indices.append(idx)
-            indices = sorted(set(indices), reverse=True)  # 大きい順で削除
-            if not indices:
-                raise ValueError("No valid indices specified.")
-            self.delete_atoms(indices)
-        except Exception as e:
-            QMessageBox.warning(self, "Input Error", f"Invalid input: {e}")     
+            self.enable_plot_picking()
+        except Exception:
+            pass
+        
+    def delete_picking_callback(self, idx):
+        if idx in self.selected_delete_indices:
+            self.selected_delete_indices.remove(idx)
+        else:
+            self.selected_delete_indices.add(idx)
+        self.update_delete_selection_display()
+        
+    def update_delete_selection_display(self):
+        indices = list(self.selected_delete_indices)
+        self.draw_selection_markers(indices)
+        if hasattr(self, 'selection_info_label'):
+            self.selection_info_label.setText(f"Selected: {len(indices)} atoms")
+
+    def on_delete_dialog_closed(self, result):
+        self.picking_callback = None
+        self.draw_selection_markers([])
+        # Disable plotter's point picking to avoid "already enabled" errors
+        try:
+            self.disable_plot_picking()
+        except Exception:
+            pass
+        
+    def execute_delete_atoms(self):
+        if not self.selected_delete_indices:
+            return
+        
+        indices = sorted(list(self.selected_delete_indices), reverse=True)
+        self.delete_atoms(indices)
+        
+        if hasattr(self, 'delete_picking_dialog'):
+            self.delete_picking_dialog.close()     
     
     def delete_atoms(self, indices):
         """指定したインデックスの原子を削除し、再描画"""
@@ -927,6 +1100,18 @@ class CellSetterApp(QMainWindow):
         if force_reset or not self.camera_state:
             self.plotter.reset_camera()
             self.plotter.camera.focal_point = cell_visual_center
+            
+            # [Fix] Invert the initial camera position to look from the opposite side
+            # Get current position (after reset_camera, it's usually +Z or similar depending on bounds)
+            pos = np.array(self.plotter.camera.position)
+            focal = np.array(self.plotter.camera.focal_point)
+            vec = pos - focal
+            
+            # Flip the vector
+            new_pos = focal - vec
+            self.plotter.camera.position = new_pos
+            self.plotter.camera.up = (0, 1, 0) # Ensure up vector is consistent
+            
             self.camera_state = None 
         else:
             self.plotter.camera = self.camera_state
@@ -1026,6 +1211,139 @@ class CellSetterApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to apply translation:\n{e}")
     
+    def on_atom_picked(self, picked_point):
+        """原子がクリックされたときの処理"""
+        if not self.atoms:
+            return
+        
+        # PyVista's point picking returns the 3D position, not the index
+        # Find the closest atom to the picked point
+        if picked_point is None or len(picked_point) != 3:
+            return
+            
+        try:
+            positions = self.atoms.get_positions()
+            picked_pos = np.array(picked_point)
+            
+            # Find closest atom
+            distances = np.linalg.norm(positions - picked_pos, axis=1)
+            idx = int(np.argmin(distances))
+            
+            # Check if click is close enough to an atom (within 1.0 Angstrom)
+            if distances[idx] > 1.0:
+                return
+            
+            # 1. Dialog Picking Mode
+            if hasattr(self, 'picking_callback') and self.picking_callback:
+                self.picking_callback(idx)
+                return
+
+            # 2. Default: Do nothing (Element setting removed)
+            pass
+        except Exception as e:
+            print(f"Error in on_atom_picked: {e}")
+
+    def draw_selection_markers(self, indices):
+        """選択された原子にマーカー（黄色い半透明な球）を表示"""
+        # 既存のマーカーを削除
+        if hasattr(self, 'selection_actor') and self.selection_actor:
+            self.plotter.remove_actor(self.selection_actor)
+            self.selection_actor = None
+            
+        if not indices:
+            return
+            
+        try:
+            positions = self.atoms.positions[indices]
+            
+            # Get VdW radii for selected atoms and scale by 1.3x
+            symbols = self.atoms.get_chemical_symbols()
+            atomic_nums = self.atoms.get_atomic_numbers()
+            vdw_max_index = len(vdw_radii)
+            
+            selected_radii = []
+            for idx in indices:
+                atom_num = atomic_nums[idx]
+                if atom_num < vdw_max_index and vdw_radii[atom_num] > 0:
+                    radius = vdw_radii[atom_num] * 0.39  # Scale by 0.39x (1.3 * 0.3)
+                else:
+                    radius = 0.4 * 0.39  # Default radius scaled
+                selected_radii.append(radius)
+            
+            # Create highlight source with per-atom radii
+            highlight_source = pv.PolyData(positions)
+            highlight_source['radii'] = np.array(selected_radii)
+            
+            # Create glyphs with scaled radii
+            highlight_glyphs = highlight_source.glyph(
+                scale='radii',
+                geom=pv.Sphere(radius=1.0, theta_resolution=16, phi_resolution=16),
+                orient=False
+            )
+            
+            self.selection_actor = self.plotter.add_mesh(
+                highlight_glyphs,
+                color='yellow',
+                opacity=0.3,  # Use 0.3 opacity like Moleditpy
+                pickable=False,
+                name='selection_markers'
+            )
+        except Exception as e:
+            print(f"Error drawing selection markers: {e}")
+
+    def set_camera_along_axis(self, axis_label):
+        """カメラを指定した軸（実空間または逆空間）に合わせる"""
+        if self.atoms is None or not self.atoms.pbc.any():
+            return
+            
+        cell = self.atoms.get_cell()
+        # Cell vectors
+        a, b, c = cell[0], cell[1], cell[2]
+        
+        # Calculate reciprocal vectors (without 2pi factor for direction)
+        # a* // b x c
+        # b* // c x a
+        # c* // a x b
+        
+        target_vec = None
+        up_vec = None
+        
+        if axis_label == 'a':
+            target_vec = a
+            up_vec = c # Arbitrary up
+        elif axis_label == 'b':
+            target_vec = b
+            up_vec = a
+        elif axis_label == 'c':
+            target_vec = c
+            up_vec = b
+        elif axis_label == 'a*':
+            target_vec = -np.cross(b, c)  # Negative for opposite direction
+            up_vec = c
+        elif axis_label == 'b*':
+            target_vec = -np.cross(c, a)  # Negative for opposite direction
+            up_vec = a
+        elif axis_label == 'c*':
+            target_vec = -np.cross(a, b)  # Negative for opposite direction
+            up_vec = b
+            
+        if target_vec is not None:
+            norm = np.linalg.norm(target_vec)
+            if norm < 1e-6: return
+            direction = target_vec / norm
+            
+            # Set camera position
+            # Look at cell center
+            center = (a + b + c) / 2.0
+            distance = np.linalg.norm(a) * 3.0 # Heuristic distance
+            
+            position = center + direction * distance
+            
+            self.plotter.camera.position = position
+            self.plotter.camera.focal_point = center
+            self.plotter.camera.up = up_vec
+            self.plotter.render()
+
     # --- [修正箇所 2] apply_rotation メソッドの修正 ---
     def apply_rotation(self):
         """指定された角度だけ分子を回転（XYZモード、ABCモード、Manualモード）"""
@@ -1107,15 +1425,17 @@ class CellSetterApp(QMainWindow):
                     p1 = positions[idx1]
                     p2 = positions[idx2]
                     
-                    # 2. 回転軸ベクトル
-                    vec = p2 - p1
+                    # 2. 回転軸ベクトル (minimum-image handling for PBC)
+                    vec = self._min_image_cart_offset(p1, p2)
                     norm = np.linalg.norm(vec)
                     if norm < 1e-6:
                         raise ValueError("Selected atoms are at the same position.")
                     axis_direction = vec / norm
                     
                     # 3. 回転中心を「2原子の中点」に設定 (これにより不自然な振れを防ぐ)
-                    rotation_center = (p1 + p2) / 2.0
+                    # Determine the midpoint accounting for periodic images
+                    p2_adj = p1 + vec
+                    rotation_center = (p1 + p2_adj) / 2.0
                     
                     # 4. 回転適用
                     angle_rad = np.radians(angle_deg)
@@ -1163,7 +1483,7 @@ class CellSetterApp(QMainWindow):
                         axis_direction = cell_vector / np.linalg.norm(cell_vector)
                         
                         # この軸上の原子を検出
-                        tolerance = 0.01  # 軸からの許容距離（Å）
+                        tolerance = 0.001  # 軸からの許容距離（Å）
                         positions = self.atoms.get_positions()
                         atoms_on_axis = []
                         
@@ -1224,7 +1544,7 @@ class CellSetterApp(QMainWindow):
         try:
             cell = self.atoms.get_cell()
             positions = self.atoms.get_positions()
-            tolerance = 0.01
+            tolerance = 0.001
             
             candidates = []
 
@@ -1249,7 +1569,7 @@ class CellSetterApp(QMainWindow):
                         'atoms': atoms_on_axis, 'count': len(atoms_on_axis), 'vector': axis_direction
                     })
 
-            # --- 2. 面上の原子検出 (変更なし) ---
+            # --- 2. 面上の原子検出 (修正: 原点を通る面のみ検出) ---
             plane_pairs = [(0, 1, 'ab-plane'), (1, 2, 'bc-plane'), (0, 2, 'ac-plane')]
             for idx1, idx2, plane_name in plane_pairs:
                 vec1 = cell[idx1]
@@ -1259,39 +1579,20 @@ class CellSetterApp(QMainWindow):
                 if norm_len < 1e-6: continue
                 normal_dir = normal_vec / norm_len
                 
+                # 面からの距離（高さ）を計算
                 projected_coords = np.dot(positions, normal_dir)
-                atom_heights = [{'idx': i, 'h': h} for i, h in enumerate(projected_coords)]
-                atom_heights.sort(key=lambda x: x['h'])
                 
-                current_group = []
-                if atom_heights:
-                    current_group.append(atom_heights[0])
-                    for i in range(1, len(atom_heights)):
-                        curr = atom_heights[i]
-                        prev = atom_heights[i-1]
-                        if abs(curr['h'] - prev['h']) < tolerance:
-                            current_group.append(curr)
-                        else:
-                            if len(current_group) >= 3:
-                                heights = [x['h'] for x in current_group]
-                                mean_h = sum(heights) / len(heights)
-                                valid_indices = [x['idx'] for x in current_group if abs(x['h'] - mean_h) < tolerance]
-                                if len(valid_indices) >= 3:
-                                    candidates.append({
-                                        'type': 'plane', 'index_1': idx1, 'index_2': idx2, 'name': plane_name,
-                                        'atoms': valid_indices, 'count': len(valid_indices), 'vector': normal_dir
-                                    })
-                            current_group = [curr]
-                    
-                    if len(current_group) >= 3:
-                        heights = [x['h'] for x in current_group]
-                        mean_h = sum(heights) / len(heights)
-                        valid_indices = [x['idx'] for x in current_group if abs(x['h'] - mean_h) < tolerance]
-                        if len(valid_indices) >= 3:
-                            candidates.append({
-                                'type': 'plane', 'index_1': idx1, 'index_2': idx2, 'name': plane_name,
-                                'atoms': valid_indices, 'count': len(valid_indices), 'vector': normal_dir
-                            })
+                # 原点を通る面（高さがほぼ0）に乗っている原子のみを抽出
+                valid_indices = []
+                for i, h in enumerate(projected_coords):
+                    if abs(h) < tolerance:
+                        valid_indices.append(i)
+                
+                if len(valid_indices) >= 3:
+                    candidates.append({
+                        'type': 'plane', 'index_1': idx1, 'index_2': idx2, 'name': plane_name,
+                        'atoms': valid_indices, 'count': len(valid_indices), 'vector': normal_dir
+                    })
 
             best_candidate = None
             force_manual = False
@@ -1435,9 +1736,8 @@ class CellSetterApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to fit molecule:\n{e}")
     
-    # --- [変更 v19] 分子配置機能 (複数原子指定対応) ---
     def fit_molecule_to_cell(self):
-        """複数原子を指定して分子を軸に沿うように配置"""
+        """複数原子を指定して分子を軸に沿うように配置（モデルレスダイアログ・ピッキング対応）"""
         if self.atoms is None:
             return
             
@@ -1445,78 +1745,184 @@ class CellSetterApp(QMainWindow):
             QMessageBox.warning(self, "Warning", "Cell is not set. Cannot fit molecule.")
             return
         
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox, QTextEdit
+        # 既存のダイアログがあれば閉じる
+        if hasattr(self, 'fit_dialog') and self.fit_dialog.isVisible():
+            self.fit_dialog.close()
+
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox, QTextEdit, QCheckBox
         
-        # ダイアログを作成
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Fit Molecule to Axis")
-        dialog.resize(450, 350)
-        layout = QVBoxLayout(dialog)
+        # ダイアログを作成 (モデルレス)
+        self.fit_dialog = QDialog(self)
+        self.fit_dialog.setWindowTitle("Fit Molecule to Axis")
+        self.fit_dialog.resize(450, 400)
+        self.fit_dialog.setModal(False) # Modeless
+        layout = QVBoxLayout(self.fit_dialog)
         
         # 情報表示
-        info_label = QLabel(f"Total atoms: {len(self.atoms)}\nYou can specify multiple atom indices separated by commas")
+        info_label = QLabel(f"Total atoms: {len(self.atoms)}\nPick atoms in 3D view or enter indices manually.")
         layout.addWidget(info_label)
         
         # 配置軸を選択 (abcを先に)
         axis_layout = QHBoxLayout()
         axis_layout.addWidget(QLabel("Target axis:"))
-        axis_combo = QComboBox()
-        axis_combo.addItems(['a-axis', 'b-axis', 'c-axis', 'X-axis', 'Y-axis', 'Z-axis'])
-        axis_layout.addWidget(axis_combo)
+        self.fit_axis_combo = QComboBox()
+        self.fit_axis_combo.addItems(['a-axis', 'b-axis', 'c-axis', 'X-axis', 'Y-axis', 'Z-axis'])
+        axis_layout.addWidget(self.fit_axis_combo)
         layout.addLayout(axis_layout)
         
-        # 軸方向を決める原子群（カンマ区切り）
+        # 軸方向を決める原子群
         direction_layout = QVBoxLayout()
-        direction_layout.addWidget(QLabel("Atom indices to define axis direction (comma-separated):"))
-        direction_input = QTextEdit()
-        direction_input.setMaximumHeight(60)
-        direction_input.setPlaceholderText("e.g., 0,1,2,3")
-        direction_layout.addWidget(direction_input)
+        direction_header = QHBoxLayout()
+        direction_header.addWidget(QLabel("Atom indices to define axis direction:"))
+        
+        self.btn_pick_direction = QPushButton("Pick")
+        self.btn_pick_direction.setCheckable(True)
+        self.btn_pick_direction.clicked.connect(lambda: self.toggle_fit_picking('direction'))
+        direction_header.addWidget(self.btn_pick_direction)
+        direction_layout.addLayout(direction_header)
+        
+        self.fit_direction_input = QTextEdit()
+        self.fit_direction_input.setMaximumHeight(60)
+        self.fit_direction_input.setPlaceholderText("e.g., 0,1,2,3")
+        direction_layout.addWidget(self.fit_direction_input)
         layout.addLayout(direction_layout)
         
         # 末端原子インデックス（オプション）
         terminal_layout = QVBoxLayout()
-        terminal_layout.addWidget(QLabel("Terminal atom indices (optional, comma-separated):"))
-        terminal_input = QTextEdit()
-        terminal_input.setMaximumHeight(60)
-        terminal_input.setPlaceholderText(f"e.g., {len(self.atoms)-1} or leave empty")
-        terminal_layout.addWidget(terminal_input)
+        terminal_header = QHBoxLayout()
+        terminal_header.addWidget(QLabel("Terminal atom indices (optional):"))
+        
+        self.btn_pick_terminal = QPushButton("Pick")
+        self.btn_pick_terminal.setCheckable(True)
+        self.btn_pick_terminal.clicked.connect(lambda: self.toggle_fit_picking('terminal'))
+        terminal_header.addWidget(self.btn_pick_terminal)
+        terminal_layout.addLayout(terminal_header)
+        
+        self.fit_terminal_input = QTextEdit()
+        self.fit_terminal_input.setMaximumHeight(60)
+        self.fit_terminal_input.setPlaceholderText(f"e.g., {len(self.atoms)-1} or leave empty")
+        terminal_layout.addWidget(self.fit_terminal_input)
         layout.addLayout(terminal_layout)
         
         # セル内での配置位置（分率座標）
         position_layout = QHBoxLayout()
         position_layout.addWidget(QLabel("Position along axis (0.0-1.0):"))
-        position_input = QLineEdit("0.5")
-        position_layout.addWidget(position_input)
+        self.fit_position_input = QLineEdit("0.5")
+        position_layout.addWidget(self.fit_position_input)
         layout.addLayout(position_layout)
         
-        # [追加 v20] VdW半径による余白設定
-        from PyQt6.QtWidgets import QCheckBox
+        # VdW半径による余白設定
         vdw_margin_layout = QHBoxLayout()
-        vdw_margin_checkbox = QCheckBox("Add VdW radius margin at terminals")
-        vdw_margin_checkbox.setChecked(True)
-        vdw_margin_layout.addWidget(vdw_margin_checkbox)
+        self.fit_vdw_margin_checkbox = QCheckBox("Add VdW radius margin at terminals")
+        self.fit_vdw_margin_checkbox.setChecked(True)
+        vdw_margin_layout.addWidget(self.fit_vdw_margin_checkbox)
         layout.addLayout(vdw_margin_layout)
         
         # ボタン
         button_layout = QHBoxLayout()
-        ok_button = QPushButton("OK")
-        cancel_button = QPushButton("Cancel")
-        ok_button.clicked.connect(dialog.accept)
-        cancel_button.clicked.connect(dialog.reject)
+        ok_button = QPushButton("Apply") # OK -> Apply since it's modeless
+        cancel_button = QPushButton("Close")
+        ok_button.clicked.connect(self.execute_fit_molecule)
+        cancel_button.clicked.connect(self.fit_dialog.close)
         button_layout.addWidget(ok_button)
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
         
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+        # ダイアログ終了時の処理
+        self.fit_dialog.finished.connect(self.on_fit_dialog_closed)
         
+        self.fit_dialog.show()
+        
+        # 初期状態: Direction picking ON
+        self.toggle_fit_picking('direction')
+
+    def toggle_fit_picking(self, target):
+        """ピッキング対象の切り替え"""
+        self.fit_picking_target = target
+        
+        # ボタン状態の更新
+        if target == 'direction':
+            self.btn_pick_direction.setChecked(True)
+            self.btn_pick_terminal.setChecked(False)
+        elif target == 'terminal':
+            self.btn_pick_direction.setChecked(False)
+            self.btn_pick_terminal.setChecked(True)
+        else:
+            self.btn_pick_direction.setChecked(False)
+            self.btn_pick_terminal.setChecked(False)
+            
+        # ピッキング開始
+        if target:
+            self.start_fit_picking()
+        else:
+            self.picking_callback = None
+            self.draw_selection_markers([])
+
+    def start_fit_picking(self):
+        """Fitダイアログ用のピッキング開始"""
+        self.picking_callback = self.fit_picking_callback
+        self.update_fit_selection_display()
+        try:
+            self.enable_plot_picking()
+        except Exception:
+            pass
+        
+    def fit_picking_callback(self, idx):
+        """原子がピックされたときの処理"""
+        target_input = None
+        if self.fit_picking_target == 'direction':
+            target_input = self.fit_direction_input
+        elif self.fit_picking_target == 'terminal':
+            target_input = self.fit_terminal_input
+            
+        if target_input:
+            current_text = target_input.toPlainText().strip()
+            indices = []
+            if current_text:
+                try:
+                    indices = [int(x.strip()) for x in current_text.split(',') if x.strip()]
+                except ValueError:
+                    pass
+            
+            if idx in indices:
+                indices.remove(idx)
+            else:
+                indices.append(idx)
+            
+            target_input.setPlainText(", ".join(map(str, indices)))
+            
+        self.update_fit_selection_display()
+
+    def update_fit_selection_display(self):
+        """現在の入力値に基づいて選択マーカーを更新"""
+        all_indices = set()
+        
+        # Direction atoms
+        try:
+            text = self.fit_direction_input.toPlainText().strip()
+            if text:
+                all_indices.update([int(x.strip()) for x in text.split(',') if x.strip()])
+        except ValueError:
+            pass
+            
+        # Terminal atoms
+        try:
+            text = self.fit_terminal_input.toPlainText().strip()
+            if text:
+                all_indices.update([int(x.strip()) for x in text.split(',') if x.strip()])
+        except ValueError:
+            pass
+            
+        self.draw_selection_markers(list(all_indices))
+
+    def execute_fit_molecule(self):
+        """Fit処理の実行（ロジックは元のfit_molecule_to_cellと同一）"""
         try:
             # パラメータを取得
-            axis_name = axis_combo.currentText()
-            direction_text = direction_input.toPlainText().strip()
-            terminal_text = terminal_input.toPlainText().strip()
-            target_position = float(position_input.text())
+            axis_name = self.fit_axis_combo.currentText()
+            direction_text = self.fit_direction_input.toPlainText().strip()
+            terminal_text = self.fit_terminal_input.toPlainText().strip()
+            target_position = float(self.fit_position_input.text())
             
             # 入力値の検証
             if target_position < 0.0 or target_position > 1.0:
@@ -1653,7 +2059,7 @@ class CellSetterApp(QMainWindow):
                     self.atoms.positions[:, other_axis] -= mean_coords[other_axis]
             
             # 4. VdW半径を考慮した余白追加（オプション）
-            if vdw_margin_checkbox.isChecked():
+            if self.fit_vdw_margin_checkbox.isChecked():
                 # 末端原子のVdW半径を取得
                 vdw_max_index = len(vdw_radii)
                 
@@ -1889,7 +2295,7 @@ class CellSetterApp(QMainWindow):
             cell_center = np.array([0.0, 0.0, 0.0])
             self.draw_scene_manually(force_reset=False, cell_center=cell_center)
             
-            margin_msg = "\n(VdW margin added)" if vdw_margin_checkbox.isChecked() else ""
+            margin_msg = "\n(VdW margin added)" if self.fit_vdw_margin_checkbox.isChecked() else ""
             QMessageBox.information(self, "Success", f"Molecule fitted to {axis_name}.{margin_msg}")
             
         except ValueError as e:
@@ -1897,6 +2303,437 @@ class CellSetterApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to fit molecule:\n{e}")
     # --- ここまで ---
+
+    def on_fit_dialog_closed(self, result):
+        self.picking_callback = None
+        self.draw_selection_markers([])
+        # Disable plotter picking state so the next modal/dialog won't hit enable twice
+        try:
+            self.disable_plot_picking()
+        except Exception:
+            pass
+
+
+    def open_group_control(self):
+        """グループ操作のための選択ダイアログを開く"""
+        if self.atoms is None:
+            return
+
+        # Close existing dialog if open
+        if hasattr(self, 'group_picking_dialog') and self.group_picking_dialog.isVisible():
+            self.group_picking_dialog.close()
+            
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+        
+        self.group_picking_dialog = QDialog(self)
+        self.group_picking_dialog.setWindowTitle("Select Group")
+        self.group_picking_dialog.setModal(False)
+        self.group_picking_dialog.resize(300, 150)
+        layout = QVBoxLayout(self.group_picking_dialog)
+        
+        layout.addWidget(QLabel("Pick atoms to define a group.\n(Clicking an atom selects its whole molecule)"))
+        
+        self.selection_info_label = QLabel("Selected: 0 atoms")
+        layout.addWidget(self.selection_info_label)
+        
+        btn_layout = QHBoxLayout()
+        btn_all = QPushButton("Select All")
+        btn_none = QPushButton("Unselect All")
+        btn_all.clicked.connect(self.select_all_atoms)
+        btn_none.clicked.connect(self.unselect_all_atoms)
+        btn_layout.addWidget(btn_all)
+        btn_layout.addWidget(btn_none)
+        layout.addLayout(btn_layout)
+        
+        # Done / Operations button
+        btn_done = QPushButton("Proceed to Operations")
+        btn_done.clicked.connect(self.finish_group_picking)
+        layout.addWidget(btn_done)
+        
+        self.group_picking_dialog.finished.connect(self.on_group_dialog_closed)
+        self.group_picking_dialog.show()
+        
+        # Start picking immediately
+        self.start_group_picking()
+
+
+    def on_group_dialog_closed(self, result):
+        """ダイアログが閉じたときにピッキングを無効化"""
+        self.picking_callback = None
+        # Clear selection markers
+        self.draw_selection_markers([])
+        # Ensure native plotter picking is disabled (avoid 'already enabled' errors)
+        try:
+            self.disable_plot_picking()
+        except Exception:
+            pass
+
+    def select_all_atoms(self):
+        if self.atoms is None: return
+        self.current_group_indices = set(range(len(self.atoms)))
+        self.update_group_selection_display()
+
+    def unselect_all_atoms(self):
+        self.current_group_indices = set()
+        self.update_group_selection_display()
+        
+    def update_group_selection_display(self):
+        """選択状態の表示更新（マーカーとラベル）"""
+        indices = list(self.current_group_indices)
+        self.draw_selection_markers(indices)
+        if hasattr(self, 'selection_info_label'):
+            self.selection_info_label.setText(f"Selected: {len(indices)} atoms")
+            # print(f"Group: {indices}") # Console output optional now
+
+    def start_group_picking(self):
+        """グループ選択のためのピッキングを開始"""
+        # Start with empty selection
+        self.current_group_indices = set()
+            
+        self.update_group_selection_display()
+        
+        # Override picking callback
+        self.picking_callback = self.group_picking_callback
+        # Ensure the plotter has point-picking enabled
+        try:
+            self.enable_plot_picking()
+        except Exception:
+            pass
+        
+    def group_picking_callback(self, idx):
+        # Molecule-wise selection
+        # Find connected component (molecule) for the picked atom
+        from ase.neighborlist import natural_cutoffs, neighbor_list
+        import networkx as nx
+        
+        # Use a slightly larger cutoff to ensure all bonds are captured
+        cutoffs = natural_cutoffs(self.atoms, mult=1.2)
+        nl = neighbor_list('ij', self.atoms, cutoffs)
+        graph = nx.Graph()
+        graph.add_nodes_from(range(len(self.atoms)))
+        graph.add_edges_from(zip(nl[0], nl[1]))
+        
+        # Find the component containing idx
+        connected_indices = set()
+        if idx in graph:
+            connected_indices = set(nx.node_connected_component(graph, idx))
+        else:
+            connected_indices = {idx} # Should not happen if graph is built correctly
+            
+        # Toggle logic: If ANY of the connected atoms are NOT in selection -> Select ALL
+        # If ALL are IN selection -> Deselect ALL
+        
+        is_fully_selected = connected_indices.issubset(self.current_group_indices)
+        
+        if is_fully_selected:
+            # Deselect all
+            self.current_group_indices -= connected_indices
+        else:
+            # Select all
+            self.current_group_indices |= connected_indices
+        
+        self.update_group_selection_display()
+            
+    def finish_group_picking(self):
+        # self.picking_callback = None # Don't clear here, let dialog close handle it? 
+        # Actually, we want to proceed to operation.
+        
+        # Close picking dialog
+        if hasattr(self, 'group_picking_dialog'):
+            self.group_picking_dialog.close()
+            del self.group_picking_dialog
+        
+        if not self.current_group_indices:
+            return
+            
+        # Open Operation Dialog
+        self.open_group_operation_dialog(list(self.current_group_indices))
+
+    def open_group_operation_dialog(self, indices):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QButtonGroup, QRadioButton, QLineEdit
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Group Operations")
+        dialog.setModal(False)
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QLabel(f"Selected {len(indices)} atoms"))
+        
+        # Store initial positions
+        self.group_initial_pos = self.atoms.positions[indices].copy()
+        self.current_group_indices_list = indices
+        
+        # === Translation Controls ===
+        translate_label = QLabel("=== Translation ===")
+        layout.addWidget(translate_label)
+        
+        translate_group = QWidget()
+        translate_layout = QGridLayout(translate_group)
+        
+        # Mode selection
+        self.group_translate_mode_group = QButtonGroup(translate_group)
+        self.group_translate_xyz_radio = QRadioButton("XYZ mode")
+        self.group_translate_abc_radio = QRadioButton("ABC mode")
+        self.group_translate_abc_radio.setChecked(True)
+        self.group_translate_mode_group.addButton(self.group_translate_xyz_radio)
+        self.group_translate_mode_group.addButton(self.group_translate_abc_radio)
+        
+        translate_layout.addWidget(self.group_translate_abc_radio, 0, 0)
+        translate_layout.addWidget(self.group_translate_xyz_radio, 0, 1)
+        
+        # Input spinboxes
+        self.group_translate_labels = []
+        self.group_translate_spinboxes = []
+        
+        for i in range(3):
+            label = QLabel()
+            spinbox = QDoubleSpinBox()
+            spinbox.setRange(-1000.0, 1000.0)
+            spinbox.setValue(0.0)
+            spinbox.setSingleStep(0.1)
+            spinbox.setDecimals(3)
+            translate_layout.addWidget(label, i + 1, 0)
+            translate_layout.addWidget(spinbox, i + 1, 1)
+            self.group_translate_labels.append(label)
+            self.group_translate_spinboxes.append(spinbox)
+        
+        def update_group_translate_labels():
+            is_xyz = self.group_translate_xyz_radio.isChecked()
+            if is_xyz:
+                for i, axis in enumerate(['X', 'Y', 'Z']):
+                    self.group_translate_labels[i].setText(f"{axis}:")
+            else:
+                for i, axis in enumerate(['a', 'b', 'c']):
+                    self.group_translate_labels[i].setText(f"{axis}:")
+        
+        self.group_translate_xyz_radio.toggled.connect(update_group_translate_labels)
+        update_group_translate_labels()
+        
+        apply_translate_button = QPushButton("Apply Translation")
+        apply_translate_button.clicked.connect(lambda: self.apply_group_translation(indices))
+        translate_layout.addWidget(apply_translate_button, 4, 0, 1, 2)
+        layout.addWidget(translate_group)
+        
+        # === Rotation Controls ===
+        rotate_label = QLabel("=== Rotation ===")
+        layout.addWidget(rotate_label)
+        
+        rotate_group = QWidget()
+        rotate_layout = QGridLayout(rotate_group)
+        
+        # Mode selection
+        self.group_rotate_mode_group = QButtonGroup(rotate_group)
+        self.group_rotate_xyz_radio = QRadioButton("XYZ mode")
+        self.group_rotate_abc_radio = QRadioButton("ABC mode")
+        self.group_rotate_manual_radio = QRadioButton("Manual mode")
+        self.group_rotate_abc_radio.setChecked(True)
+        self.group_rotate_mode_group.addButton(self.group_rotate_xyz_radio)
+        self.group_rotate_mode_group.addButton(self.group_rotate_abc_radio)
+        self.group_rotate_mode_group.addButton(self.group_rotate_manual_radio)
+        
+        rotate_layout.addWidget(self.group_rotate_abc_radio, 0, 0)
+        rotate_layout.addWidget(self.group_rotate_xyz_radio, 0, 1)
+        rotate_layout.addWidget(self.group_rotate_manual_radio, 0, 2)
+        
+        # Input spinboxes
+        self.group_rotate_labels = []
+        self.group_rotate_spinboxes = []
+        
+        for i in range(3):
+            label = QLabel()
+            spinbox = QDoubleSpinBox()
+            spinbox.setRange(-360.0, 360.0)
+            spinbox.setValue(0.0)
+            spinbox.setSingleStep(1.0)
+            spinbox.setDecimals(2)
+            rotate_layout.addWidget(label, i + 1, 0)
+            rotate_layout.addWidget(spinbox, i + 1, 1, 1, 2)
+            self.group_rotate_labels.append(label)
+            self.group_rotate_spinboxes.append(spinbox)
+        
+        # Manual mode input
+        self.group_manual_input_widget = QWidget()
+        manual_layout = QHBoxLayout(self.group_manual_input_widget)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_layout.addWidget(QLabel("Axis (idx1, idx2):"))
+        self.group_manual_axis_edit = QLineEdit()
+        self.group_manual_axis_edit.setPlaceholderText("e.g., 0, 5")
+        manual_layout.addWidget(self.group_manual_axis_edit)
+        rotate_layout.addWidget(self.group_manual_input_widget, 4, 0, 1, 3)
+        self.group_manual_input_widget.setVisible(False)
+        
+        def update_group_rotate_labels():
+            is_xyz = self.group_rotate_xyz_radio.isChecked()
+            is_manual = self.group_rotate_manual_radio.isChecked()
+            
+            self.group_manual_input_widget.setVisible(is_manual)
+            
+            for sb in self.group_rotate_spinboxes:
+                sb.setVisible(True)
+                sb.setEnabled(True)
+            for lbl in self.group_rotate_labels:
+                lbl.setVisible(True)
+            
+            if is_xyz:
+                for i, axis in enumerate(['X', 'Y', 'Z']):
+                    self.group_rotate_labels[i].setText(f"Around {axis}:")
+            elif is_manual:
+                self.group_rotate_labels[0].setText("Angle:")
+                self.group_rotate_labels[1].setVisible(False)
+                self.group_rotate_spinboxes[1].setVisible(False)
+                self.group_rotate_labels[2].setVisible(False)
+                self.group_rotate_spinboxes[2].setVisible(False)
+            else:
+                for i, axis in enumerate(['a', 'b', 'c']):
+                    self.group_rotate_labels[i].setText(f"Around {axis}:")
+        
+        self.group_rotate_xyz_radio.toggled.connect(update_group_rotate_labels)
+        self.group_rotate_manual_radio.toggled.connect(update_group_rotate_labels)
+        update_group_rotate_labels()
+        
+        apply_rotate_button = QPushButton("Apply Rotation")
+        apply_rotate_button.clicked.connect(lambda: self.apply_group_rotation(indices))
+        rotate_layout.addWidget(apply_rotate_button, 5, 0, 1, 3)
+        layout.addWidget(rotate_group)
+        
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.close)
+        layout.addWidget(close_button)
+        
+        dialog.show()
+    
+    def apply_group_translation(self, indices):
+        """Apply translation to selected group"""
+        try:
+            is_xyz = self.group_translate_xyz_radio.isChecked()
+            
+            if is_xyz:
+                # XYZ mode - direct Cartesian translation
+                dx = self.group_translate_spinboxes[0].value()
+                dy = self.group_translate_spinboxes[1].value()
+                dz = self.group_translate_spinboxes[2].value()
+                shift_vector = np.array([dx, dy, dz])
+            else:
+                # ABC mode - fractional translation
+                da = self.group_translate_spinboxes[0].value()
+                db = self.group_translate_spinboxes[1].value()
+                dc = self.group_translate_spinboxes[2].value()
+                
+                cell = self.atoms.get_cell()
+                shift_vector = da * cell[0] + db * cell[1] + dc * cell[2]
+            
+            # Apply translation
+            self.atoms.positions[indices] += shift_vector
+            
+            # Reset spinboxes -> Removed to keep values
+            # for spinbox in self.group_translate_spinboxes:
+            #     spinbox.setValue(0.0)
+            
+            # Redraw
+            cell_center = np.array([0.0, 0.0, 0.0])
+            self.draw_scene_manually(force_reset=False, cell_center=cell_center)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to apply translation:\n{e}")
+    
+    def apply_group_rotation(self, indices):
+        """Apply rotation to selected group"""
+        try:
+            is_xyz = self.group_rotate_xyz_radio.isChecked()
+            is_manual = self.group_rotate_manual_radio.isChecked()
+            
+            # Calculate centroid of selected atoms
+            centroid = np.mean(self.atoms.positions[indices], axis=0)
+            
+            if is_manual:
+                # Manual mode - rotate around axis defined by two atoms
+                axis_text = self.group_manual_axis_edit.text().strip()
+                if not axis_text:
+                    QMessageBox.warning(self, "Warning", "Please specify two atom indices")
+                    return
+                
+                try:
+                    parts = [p.strip() for p in axis_text.split(',')]
+                    idx1, idx2 = int(parts[0]), int(parts[1])
+                    
+                    if idx1 < 0 or idx1 >= len(self.atoms) or idx2 < 0 or idx2 >= len(self.atoms):
+                        raise ValueError("Invalid atom indices")
+                    
+                    pos1 = self.atoms.positions[idx1]
+                    pos2 = self.atoms.positions[idx2]
+                    # Consider periodic images to get shortest axis vector
+                    axis_vector = self._min_image_cart_offset(pos1, pos2)
+                    axis_vector = axis_vector / np.linalg.norm(axis_vector)
+                    
+                    angle_deg = self.group_rotate_spinboxes[0].value()
+                    
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Invalid axis specification:\n{e}")
+                    return
+            elif is_xyz:
+                # XYZ mode
+                angles = [self.group_rotate_spinboxes[i].value() for i in range(3)]
+                rotation = Rotation.from_euler('xyz', angles, degrees=True)
+                
+                # Apply rotation
+                for idx in indices:
+                    rel_pos = self.atoms.positions[idx] - centroid
+                    rotated_pos = rotation.apply(rel_pos)
+                    self.atoms.positions[idx] = centroid + rotated_pos
+                
+                # Reset spinboxes -> Removed
+                # for spinbox in self.group_rotate_spinboxes:
+                #     spinbox.setValue(0.0)
+                
+                # Redraw
+                cell_center = np.array([0.0, 0.0, 0.0])
+                self.draw_scene_manually(force_reset=False, cell_center=cell_center)
+                return
+            else:
+                # ABC mode
+                cell = self.atoms.get_cell()
+                angles = [self.group_rotate_spinboxes[i].value() for i in range(3)]
+                
+                # Rotate around each cell axis
+                for i, angle_deg in enumerate(angles):
+                    if abs(angle_deg) < 0.01:
+                        continue
+                    
+                    axis_vector = cell[i] / np.linalg.norm(cell[i])
+                    rotation = Rotation.from_rotvec(np.radians(angle_deg) * axis_vector)
+                    
+                    for idx in indices:
+                        rel_pos = self.atoms.positions[idx] - centroid
+                        rotated_pos = rotation.apply(rel_pos)
+                        self.atoms.positions[idx] = centroid + rotated_pos
+                
+                # Reset spinboxes -> Removed
+                # for spinbox in self.group_rotate_spinboxes:
+                #     spinbox.setValue(0.0)
+                
+                # Redraw
+                cell_center = np.array([0.0, 0.0, 0.0])
+                self.draw_scene_manually(force_reset=False, cell_center=cell_center)
+                return
+            
+            # Manual mode rotation
+            rotation = Rotation.from_rotvec(np.radians(angle_deg) * axis_vector)
+            
+            for idx in indices:
+                rel_pos = self.atoms.positions[idx] - centroid
+                rotated_pos = rotation.apply(rel_pos)
+                self.atoms.positions[idx] = centroid + rotated_pos
+            
+            # Reset spinbox -> Removed
+            # self.group_rotate_spinboxes[0].setValue(0.0)
+            
+            # Redraw
+            cell_center = np.array([0.0, 0.0, 0.0])
+            self.draw_scene_manually(force_reset=False, cell_center=cell_center)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to apply rotation:\n{e}")
 
     def save_cif_file(self):
         if self.atoms is None:
